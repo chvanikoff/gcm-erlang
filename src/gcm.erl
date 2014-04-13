@@ -49,8 +49,11 @@ start_link(Name, Key, ErrorFun) ->
 stop(Name) ->
     gen_server:call(Name, stop).
 
+
 push(Name, RegIds, Message) ->
-    gen_server:cast(Name, {send, RegIds, Message}).
+    push(Name, RegIds, Message, undefined).
+push(Name, RegIds, Message, From) ->
+    gen_server:cast(Name, {send, RegIds, Message, From}).
 
 sync_push(Name, RegIds, Message) ->
     gen_server:call(Name, {send, RegIds, Message}).
@@ -107,8 +110,8 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({send, RegIds, Message}, #state{key=Key, error_fun=ErrorFun} = State) ->
-    do_push(RegIds, Message, Key, ErrorFun),
+handle_cast({send, RegIds, Message, From}, #state{key=Key, error_fun=ErrorFun} = State) ->
+    do_push(RegIds, Message, Key, ErrorFun, From),
     {noreply, State};
 
 handle_cast(_Msg, State) ->
@@ -155,7 +158,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-do_push(RegIds, Message, Key, ErrorFun) ->
+do_push(RegIds, Message, Key, ErrorFun, From) ->
     lager:info("Message=~p; RegIds=~p~n", [Message, RegIds]),
     GCMRequest = jsx:encode([{<<"registration_ids">>, RegIds}|Message]),
     ApiKey = string:concat("key=", Key),
@@ -163,7 +166,7 @@ do_push(RegIds, Message, Key, ErrorFun) ->
     try httpc:request(post, {?BASEURL, [{"Authorization", ApiKey}], "application/json", GCMRequest}, [], []) of
         {ok, {{_, 200, _}, Headers, GCMResponse}} ->
             Json = jsx:decode(response_to_binary(GCMResponse)),
-            handle_push_result(Json, RegIds, ErrorFun);
+            handle_push_result(Json, RegIds, ErrorFun, From);
         {error, Reason} ->
             %% Some general error during the request.
             lager:error("error in request: ~p~n", [Reason]),
@@ -197,7 +200,11 @@ handle_push_result(Json, RegIds, ErrorFun) ->
         true ->
             parse_results(Results, RegIds, ErrorFun);
         false ->
-            ok
+            case From of
+                undefined -> ok;
+                %% TODO: implement msg IDs; keep recent(?) messages in ETS(?)
+                Pid -> Pid ! gcm_ok
+            end
     end.
 
 response_to_binary(Json) when is_binary(Json) ->
