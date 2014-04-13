@@ -12,7 +12,7 @@
 
 %% API
 -export([start/2, start/3, stop/1, start_link/2, start_link/3]).
--export([push/3, sync_push/3]).
+-export([push/3, push/4, sync_push/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -94,7 +94,7 @@ handle_call(stop, _From, State) ->
     {stop, normal, stopped, State};
 
 handle_call({send, RegIds, Message}, _From, #state{key=Key, error_fun=ErrorFun} = State) ->
-    {reply, do_push(RegIds, Message, Key, ErrorFun), State};
+    {reply, do_push(RegIds, Message, Key, ErrorFun, undefined), State};
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -163,7 +163,7 @@ do_push(RegIds, Message, Key, ErrorFun, From) ->
     ApiKey = string:concat("key=", Key),
 
     try httpc:request(post, {?BASEURL, [{"Authorization", ApiKey}], "application/json", GCMRequest}, [], []) of
-        {ok, {{_, 200, _}, Headers, GCMResponse}} ->
+        {ok, {{_, 200, _}, _Headers, GCMResponse}} ->
             Json = jsx:decode(response_to_binary(GCMResponse)),
             handle_push_result(Json, RegIds, ErrorFun, From);
         {error, Reason} ->
@@ -193,7 +193,7 @@ do_push(RegIds, Message, Key, ErrorFun, From) ->
             {error, Exception}
     end.
 
-handle_push_result(Json, RegIds, ErrorFun) ->
+handle_push_result(Json, RegIds, ErrorFun, From) ->
     {_Multicast, _Success, Failure, Canonical, Results} = get_response_fields(Json),
     case to_be_parsed(Failure, Canonical) of
         true ->
