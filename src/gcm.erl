@@ -168,10 +168,10 @@ do_push(RegIds, Message, Key, ErrorFun, From) ->
     GCMRequest = jsx:encode([{<<"registration_ids">>, RegIds}|Message]),
     ApiKey = string:concat("key=", Key),
 
-    try httpc:request(post, {?BASEURL, [{"Authorization", ApiKey}], "application/json", GCMRequest}, [], []) of
+    Result = try httpc:request(post, {?BASEURL, [{"Authorization", ApiKey}], "application/json", GCMRequest}, [], []) of
         {ok, {{_, 200, _}, _Headers, GCMResponse}} ->
             Json = jsx:decode(response_to_binary(GCMResponse)),
-            handle_push_result(Json, RegIds, ErrorFun, From);
+            handle_push_result(Json, RegIds, ErrorFun);
         {error, Reason} ->
             %% Some general error during the request.
             lager:error("error in request: ~p~n", [Reason]),
@@ -197,25 +197,24 @@ do_push(RegIds, Message, Key, ErrorFun, From) ->
         Exception ->
             lager:error("exception ~p in call to URL: ~p~n", [Exception, ?BASEURL]),
             {error, Exception}
+    end,
+    case From of
+        undefined -> Result;
+        Pid -> Pid ! Result
     end.
 
-handle_push_result(Json, RegIds, undefined, _From) ->
+handle_push_result(Json, RegIds, undefined) ->
     {_Multicast, _Success, _Failure, _Canonical, Results} = get_response_fields(Json),
     lists:map(fun({Result, RegId}) -> parse_results(Result, RegId, fun(E, I) -> {E, I} end) end,
         lists:zip(Results, RegIds));
 
-handle_push_result(Json, RegIds, ErrorFun, From) ->
+handle_push_result(Json, RegIds, ErrorFun) ->
     {_Multicast, _Success, Failure, Canonical, Results} = get_response_fields(Json),
     case to_be_parsed(Failure, Canonical) of
         true ->
             lists:foreach(fun({Result, RegId}) -> parse_results(Result, RegId, ErrorFun) end,
                 lists:zip(Results, RegIds));
-        false ->
-            case From of
-                undefined -> ok;
-                %% TODO: implement msg IDs; keep recent(?) messages in ETS(?)
-                Pid -> Pid ! gcm_ok
-            end
+        false -> ok
     end.
 
 response_to_binary(Json) when is_binary(Json) ->
